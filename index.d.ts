@@ -927,12 +927,25 @@ export interface DrawingHyperlinkValue {
 	tooltip?: string;
 }
 
+export type WorksheetShapeType = 'shape' | 'connector';
+
+export interface WorksheetShape {
+	name?: string;
+	visible?: boolean;
+	props: ShapeProps;
+	range: DrawingRange;
+	hyperlinks?: DrawingHyperlinkValue;
+	shapeType?: WorksheetShapeType;
+}
+
 export interface ShapeProps {
 	/**
 	 * Defined as DocumentFormat.OpenXml.Drawing.ShapeTypeValues in Open API Spec.
 	 * See https://learn.microsoft.com/ja-jp/dotnet/api/documentformat.openxml.drawing.shapetypevalues
 	 */
 	type: string;
+	name?: string;
+	visible?: boolean;
 	rotation?: number;
 	horizontalFlip?: boolean;
 	verticalFlip?: boolean;
@@ -1405,10 +1418,12 @@ export interface Worksheet {
 
 	addShape(props: ShapeProps, range: string | { editAs?: string; } & DrawingRange | { editAs?: string; } & DrawingPosition, hyperlinks?: DrawingHyperlinkValue ): void;
 
-	getShapes(): Array<{
-		props: ShapeProps,
-		range: DrawingRange,
-	}>
+	getShapes(): WorksheetShape[];
+	getShapeById(id: string): WorksheetShape | undefined;
+	setShapeId(shape: WorksheetShape | number | string, id: string | number): WorksheetShape;
+	setShapeVisibility(shape: WorksheetShape | number | string, visible: boolean): WorksheetShape;
+	hideShape(shape: WorksheetShape | number | string): WorksheetShape;
+	showShape(shape: WorksheetShape | number | string): WorksheetShape;
 
 	commit(): void;
 

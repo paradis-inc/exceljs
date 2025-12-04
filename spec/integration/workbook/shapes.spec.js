@@ -1,6 +1,7 @@
 const ExcelJS = verquire('exceljs');
 
 const TEST_XLSX_FILE_NAME = './spec/out/wb.test.xlsx';
+const WITH_LINE_FIXTURE = './test/data/withline.xlsx';
 
 // =============================================================================
 // Tests
@@ -97,6 +98,98 @@ describe('Workbook', () => {
             type: 'solid',
             color: {rgb: 'AABBCC'},
           });
+        });
+    });
+
+    it('stores shape name and visibility', () => {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('sheet');
+      let wb2;
+      let ws2;
+
+      ws.addShape(
+        {
+          type: 'line',
+          name: 'Named Line',
+          visible: false,
+          fill: {type: 'solid', color: {theme: 'accent6'}},
+        },
+        'B2:D6'
+      );
+
+      return wb.xlsx
+        .writeFile(TEST_XLSX_FILE_NAME)
+        .then(() => {
+          wb2 = new ExcelJS.Workbook();
+          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          ws2 = wb2.getWorksheet('sheet');
+          expect(ws2).to.not.be.undefined();
+          const shapes = ws2.getShapes();
+          expect(shapes.length).to.equal(1);
+          const shape = shapes[0];
+          expect(shape.name).to.equal('Named Line');
+          expect(shape.visible).to.equal(false);
+        });
+    });
+
+    it('reads existing shape names and toggles visibility', () => {
+      const wb = new ExcelJS.Workbook();
+      let wb2;
+
+      return wb.xlsx
+        .readFile(WITH_LINE_FIXTURE)
+        .then(() => {
+          const ws = wb.getWorksheet('Sheet1');
+          expect(ws).to.not.be.undefined();
+          const shapes = ws.getShapes();
+          expect(shapes.length).to.equal(1);
+          expect(shapes[0].name).to.equal('直線コネクタ 2');
+          expect(shapes[0].visible).to.equal(true);
+
+          shapes[0].visible = false;
+          return wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          wb2 = new ExcelJS.Workbook();
+          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          const ws = wb2.getWorksheet('Sheet1');
+          const shapes = ws.getShapes();
+          expect(shapes.length).to.equal(1);
+          expect(shapes[0].name).to.equal('直線コネクタ 2');
+          expect(shapes[0].visible).to.equal(false);
+        });
+    });
+
+    it('assigns ids and toggles visibility via worksheet helpers', () => {
+      const wb = new ExcelJS.Workbook();
+      let wb2;
+
+      return wb.xlsx
+        .readFile(WITH_LINE_FIXTURE)
+        .then(() => {
+          const ws = wb.getWorksheet('Sheet1');
+          const [shape] = ws.getShapes();
+          ws.setShapeId(shape, 'line-id-001');
+          expect(ws.getShapeById('line-id-001')).to.equal(shape);
+          ws.hideShape('line-id-001');
+          expect(shape.visible).to.equal(false);
+          return wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          wb2 = new ExcelJS.Workbook();
+          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          const ws = wb2.getWorksheet('Sheet1');
+          const shape = ws.getShapeById('line-id-001');
+          expect(shape).to.not.be.undefined();
+          expect(shape.visible).to.equal(false);
+          ws.showShape('line-id-001');
+          expect(ws.getShapeById('line-id-001').visible).to.equal(true);
         });
     });
   });
