@@ -19285,6 +19285,102 @@ class XLSX {
     await this.write(stream, options);
     return stream.read();
   }
+
+  /**
+   * xlsx バッファ内のカメラオブジェクト（<a14:cameraTool>）の EMF スナップショットを
+   * handler が返す PNG に置き換えた新しいバッファを返す。
+   *
+   * @param {Buffer} xlsxBuffer - writeBuffer() で生成した xlsx バッファ
+   * @param {Function} handler - async (sheetName, cellRange, xlsxBuffer) => Buffer | null
+   * @returns {Promise<Buffer>} - カメラ画像が更新された xlsx バッファ
+   */
+  async refreshCameras(xlsxBuffer, handler) {
+    const zip = await JSZip.loadAsync(xlsxBuffer);
+    const drawingFiles = Object.keys(zip.files).filter(name => /^xl\/drawings\/drawing\d+\.xml$/.test(name));
+    let anyModified = false;
+    for (const drawingPath of drawingFiles) {
+      const drawingNameMatch = drawingPath.match(/drawing\d+/);
+      if (!drawingNameMatch) continue;
+      const drawingBaseName = drawingNameMatch[0];
+      const relsPath = "xl/drawings/_rels/".concat(drawingBaseName, ".xml.rels");
+      const drawingXml = await zip.files[drawingPath].async('string');
+      let relsXml = zip.files[relsPath] ? await zip.files[relsPath].async('string') : '';
+      let relsModified = false;
+
+      // twoCellAnchor / oneCellAnchor ブロックを抽出してカメラシェイプを探す
+      const findAnchors = (xml, tagName) => {
+        const results = [];
+        const re = new RegExp("<xdr:".concat(tagName, "[\\s\\S]*?<\\/xdr:").concat(tagName, ">"), 'g');
+        let m;
+        while ((m = re.exec(xml)) !== null) {
+          results.push(m[0]);
+        }
+        return results;
+      };
+      const anchors = [...findAnchors(drawingXml, 'twoCellAnchor'), ...findAnchors(drawingXml, 'oneCellAnchor')];
+      for (const block of anchors) {
+        // カメラシェイプかどうかを確認
+        const cameraMatch = block.match(/<a14:cameraTool\b[^>]*\bcellRange="([^"]+)"/);
+        const embedMatch = block.match(/<a:blip\b[^>]*\br:embed="([^"]+)"/);
+        if (!cameraMatch || !embedMatch) continue;
+        const cellRange = cameraMatch[1];
+        const rId = embedMatch[1];
+
+        // シート名を cellRange から抽出 ('Sheet2'!$B$3:$AQ$23 または Sheet2!$B$3:$AQ$23)
+        const sheetMatch = cellRange.match(/^'([^']+)'!/) || cellRange.match(/^([^!]+)!/);
+        if (!sheetMatch) continue;
+        const sheetName = sheetMatch[1];
+
+        // rels から旧メディアパスを取得
+        const targetRe = new RegExp("<Relationship[^>]*\\bId=\"".concat(rId, "\"[^>]*\\bTarget=\"([^\"]+)\""));
+        const targetMatch = relsXml.match(targetRe);
+        if (!targetMatch) continue;
+        const oldTarget = targetMatch[1];
+        const mediaNameMatch = oldTarget.match(/\/([^/]+)$/);
+        if (!mediaNameMatch) continue;
+        const mediaName = mediaNameMatch[1];
+
+        // ハンドラーで PNG を取得
+        let pngBuffer;
+        try {
+          pngBuffer = await handler(sheetName, cellRange, xlsxBuffer);
+        } catch (_unused) {
+          continue;
+        }
+        if (!pngBuffer) continue;
+
+        // 旧メディアを PNG に置き換え
+        const baseName = mediaName.replace(/\.[^.]+$/, '');
+        const newMediaName = "".concat(baseName, ".png");
+        const newTarget = oldTarget.replace(mediaName, newMediaName);
+        const oldMediaPath = "xl/media/".concat(mediaName);
+        if (zip.files[oldMediaPath]) {
+          zip.remove(oldMediaPath);
+        }
+        zip.file("xl/media/".concat(newMediaName), pngBuffer);
+
+        // rels の Target を更新（同じ rId のエントリのみ）
+        relsXml = relsXml.replace(new RegExp("(<Relationship[^>]*\\bId=\"".concat(rId, "\"[^>]*\\bTarget=)\"[^\"]*\"")), "$1\"".concat(newTarget, "\""));
+        relsModified = true;
+        anyModified = true;
+      }
+      if (relsModified) {
+        zip.file(relsPath, relsXml);
+      }
+    }
+    if (!anyModified) return null;
+
+    // PNG の ContentType が未登録なら追加
+    let contentTypesXml = await zip.files['[Content_Types].xml'].async('string');
+    if (!contentTypesXml.includes('Extension="png"')) {
+      contentTypesXml = contentTypesXml.replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>');
+      zip.file('[Content_Types].xml', contentTypesXml);
+    }
+    return zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE'
+    });
+  }
 }
 XLSX.RelType = require('./rel-type');
 module.exports = XLSX;
