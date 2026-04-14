@@ -4400,7 +4400,11 @@ class Worksheet {
       sheetProtection: this.sheetProtection,
       tables: Object.values(this.tables).map(table => table.model),
       pivotTables: this.pivotTables,
-      conditionalFormattings: this.conditionalFormattings
+      conditionalFormattings: this.conditionalFormattings,
+      rawVmlXml: this.rawVmlXml,
+      rawVmlRelsXml: this.rawVmlRelsXml,
+      rawDrawingXml: this.rawDrawingXml,
+      rawDrawingRelsXml: this.rawDrawingRelsXml
     };
 
     // =================================================
@@ -4466,6 +4470,10 @@ class Worksheet {
     }, {});
     this.pivotTables = value.pivotTables;
     this.conditionalFormattings = value.conditionalFormattings;
+    this.rawVmlXml = value.rawVmlXml || null;
+    this.rawVmlRelsXml = value.rawVmlRelsXml || null;
+    this.rawDrawingXml = value.rawDrawingXml || null;
+    this.rawDrawingRelsXml = value.rawDrawingRelsXml || null;
   }
   _resolveShape(shapeRef) {
     if (shapeRef instanceof Shape) {
@@ -14869,6 +14877,13 @@ class WorkSheetXform extends BaseXform {
         commentName: "comments".concat(model.id),
         vmlDrawing: "vmlDrawing".concat(model.id)
       });
+    } else if (model.rawVmlXml) {
+      // No comments but VML exists (e.g. camera shapes) — preserve the vmlDrawing relationship
+      rels.push({
+        Id: nextRid(rels),
+        Type: RelType.VmlDrawing,
+        Target: "../drawings/vmlDrawing".concat(model.id, ".vml")
+      });
     }
     const getDrawingModel = () => {
       if (!model.drawing) {
@@ -15195,6 +15210,15 @@ class WorkSheetXform extends BaseXform {
         }
       }
       if (rel.Type === RelType.VmlDrawing) {
+        // Preserve raw VML to protect camera shapes and other unrecognized VML objects
+        const rawVml = options.rawVmlDrawings && options.rawVmlDrawings[rel.Target];
+        if (rawVml) {
+          model.rawVmlXml = rawVml;
+        }
+        const rawVmlRels = options.rawVmlDrawingRels && options.rawVmlDrawingRels[rel.Target];
+        if (rawVmlRels) {
+          model.rawVmlRelsXml = rawVmlRels;
+        }
         if (model.comments && model.comments.length) {
           const vmlComment = options.vmlDrawings[rel.Target];
           if (vmlComment) {
@@ -15236,6 +15260,13 @@ class WorkSheetXform extends BaseXform {
       const match = drawingRel.Target.match(/\/drawings\/([a-zA-Z0-9]+)[.][a-zA-Z]{3,4}$/);
       if (match) {
         const drawingName = match[1];
+        // Preserve raw drawing XML to protect camera shapes and other unrecognized drawing elements
+        if (options.rawDrawings && options.rawDrawings[drawingName]) {
+          model.rawDrawingXml = options.rawDrawings[drawingName];
+        }
+        if (options.rawDrawingRels && options.rawDrawingRels[drawingName]) {
+          model.rawDrawingRelsXml = options.rawDrawingRels[drawingName];
+        }
         const drawing = options.drawings[drawingName];
         drawing.anchors.forEach(anchor => {
           if (anchor.medium) {
@@ -18469,9 +18500,13 @@ class XLSX {
       mediaIndex: model.mediaIndex,
       date1904: model.properties && model.properties.date1904,
       drawings: model.drawings,
+      rawDrawings: model.rawDrawings,
+      rawDrawingRels: model.rawDrawingRels,
       comments: model.comments,
       tables: model.tables,
-      vmlDrawings: model.vmlDrawings
+      vmlDrawings: model.vmlDrawings,
+      rawVmlDrawings: model.rawVmlDrawings,
+      rawVmlDrawingRels: model.rawVmlDrawingRels
     };
     model.worksheets.forEach(worksheet => {
       worksheet.relationships = model.worksheetRels[worksheet.sheetNo];
@@ -18489,7 +18524,11 @@ class XLSX {
     delete model.mediaIndex;
     delete model.drawings;
     delete model.drawingRels;
+    delete model.rawDrawings;
+    delete model.rawDrawingRels;
     delete model.vmlDrawings;
+    delete model.rawVmlDrawings;
+    delete model.rawVmlDrawingRels;
   }
   async _processWorksheetEntry(stream, model, sheetNo, options, path) {
     const xform = new WorksheetXform(options);
@@ -18624,9 +18663,13 @@ class XLSX {
       mediaIndex: {},
       drawings: {},
       drawingRels: {},
+      rawDrawings: {},
+      rawDrawingRels: {},
       comments: {},
       tables: {},
       vmlDrawings: {},
+      rawVmlDrawings: {},
+      rawVmlDrawingRels: {},
       externalLinkEntries: {}
     };
     const zip = await JSZip.loadAsync(buffer);
@@ -18738,6 +18781,8 @@ class XLSX {
               }
               match = entryName.match(/xl\/drawings\/([a-zA-Z0-9]+)[.]xml/);
               if (match) {
+                // Preserve raw drawing XML to protect camera shapes and other unrecognized drawing elements
+                model.rawDrawings[match[1]] = await entry.async('string');
                 await this._processDrawingEntry(stream, model, match[1]);
                 break;
               }
@@ -18753,12 +18798,22 @@ class XLSX {
               }
               match = entryName.match(/xl\/drawings\/_rels\/([a-zA-Z0-9]+)[.]xml[.]rels/);
               if (match) {
+                // Preserve raw drawing rels XML (references to cached camera snapshot images, etc.)
+                model.rawDrawingRels[match[1]] = await entry.async('string');
                 await this._processDrawingRelsEntry(stream, model, match[1]);
                 break;
               }
               match = entryName.match(/xl\/drawings\/(vmlDrawing\d+)[.]vml/);
               if (match) {
+                // Preserve raw VML to protect camera shapes and other unrecognized VML objects
+                model.rawVmlDrawings["../drawings/".concat(match[1], ".vml")] = await entry.async('string');
                 await this._processVmlDrawingEntry(stream, model, match[1]);
+                break;
+              }
+              match = entryName.match(/xl\/drawings\/_rels\/(vmlDrawing\d+)[.]vml[.]rels/);
+              if (match) {
+                // Preserve VML rels (references to cached camera snapshot images, etc.)
+                model.rawVmlDrawingRels["../drawings/".concat(match[1], ".vml")] = await entry.async('string');
                 break;
               }
             }
@@ -18810,15 +18865,32 @@ class XLSX {
         drawing
       } = worksheet;
       if (drawing) {
-        drawingXform.prepare(drawing, {});
-        let xml = drawingXform.toXml(drawing);
-        zip.append(xml, {
-          name: "xl/drawings/".concat(drawing.name, ".xml")
-        });
-        xml = relsXform.toXml(drawing.rels);
-        zip.append(xml, {
-          name: "xl/drawings/_rels/".concat(drawing.name, ".xml.rels")
-        });
+        if (worksheet.rawDrawingXml) {
+          // Use raw XML to preserve camera shapes and other unrecognized drawing elements
+          zip.append(worksheet.rawDrawingXml, {
+            name: "xl/drawings/".concat(drawing.name, ".xml")
+          });
+          if (worksheet.rawDrawingRelsXml) {
+            zip.append(worksheet.rawDrawingRelsXml, {
+              name: "xl/drawings/_rels/".concat(drawing.name, ".xml.rels")
+            });
+          } else {
+            const xml = relsXform.toXml(drawing.rels);
+            zip.append(xml, {
+              name: "xl/drawings/_rels/".concat(drawing.name, ".xml.rels")
+            });
+          }
+        } else {
+          drawingXform.prepare(drawing, {});
+          let xml = drawingXform.toXml(drawing);
+          zip.append(xml, {
+            name: "xl/drawings/".concat(drawing.name, ".xml")
+          });
+          xml = relsXform.toXml(drawing.rels);
+          zip.append(xml, {
+            name: "xl/drawings/_rels/".concat(drawing.name, ".xml.rels")
+          });
+        }
       }
     });
   }
@@ -19095,6 +19167,18 @@ class XLSX {
         zip.append(xmlStream.xml, {
           name: "xl/comments".concat(worksheet.id, ".xml")
         });
+      }
+      if (worksheet.rawVmlXml) {
+        // Preserve original VML (camera shapes, comment positions, etc.)
+        zip.append(worksheet.rawVmlXml, {
+          name: "xl/drawings/vmlDrawing".concat(worksheet.id, ".vml")
+        });
+        if (worksheet.rawVmlRelsXml) {
+          zip.append(worksheet.rawVmlRelsXml, {
+            name: "xl/drawings/_rels/vmlDrawing".concat(worksheet.id, ".vml.rels")
+          });
+        }
+      } else if (worksheet.comments.length > 0) {
         xmlStream = new XmlStream();
         vmlNotesXform.render(xmlStream, worksheet);
         zip.append(xmlStream.xml, {
