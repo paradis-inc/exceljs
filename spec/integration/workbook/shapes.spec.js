@@ -164,6 +164,38 @@ describe('Workbook', () => {
         });
     });
 
+    it('persists range updates for shapes read from raw drawing xml', () => {
+      const wb = new ExcelJS.Workbook();
+      let wb2;
+      let expectedTopRow;
+      let expectedBottomRow;
+
+      return wb.xlsx
+        .readFile(WITH_LINE_FIXTURE)
+        .then(() => {
+          const ws = wb.getWorksheet('Sheet1');
+          expect(ws).to.not.be.undefined();
+          const [shape] = ws.getShapes();
+          expect(shape).to.not.be.undefined();
+
+          shape.range.tl.nativeRow += 2;
+          shape.range.br.nativeRow += 2;
+          expectedTopRow = shape.range.tl.nativeRow;
+          expectedBottomRow = shape.range.br.nativeRow;
+          return wb.xlsx.writeFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          wb2 = new ExcelJS.Workbook();
+          return wb2.xlsx.readFile(TEST_XLSX_FILE_NAME);
+        })
+        .then(() => {
+          const ws = wb2.getWorksheet('Sheet1');
+          const [shape] = ws.getShapes();
+          expect(shape.range.tl.nativeRow).to.equal(expectedTopRow);
+          expect(shape.range.br.nativeRow).to.equal(expectedBottomRow);
+        });
+    });
+
     it('assigns ids and toggles visibility via worksheet helpers', () => {
       const wb = new ExcelJS.Workbook();
       let wb2;
